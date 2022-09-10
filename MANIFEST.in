@@ -1,0 +1,2 @@
+include KorSEC/data/*
+include KorSEC/data/sec.dict/*
