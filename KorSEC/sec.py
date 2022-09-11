@@ -178,8 +178,6 @@ class SEC:
         return target_idxs
     
     def _get_target_idxs_from_label(self, labels:str) -> list:
-        '''
-        '''
         targets = [""]
         for l in labels:
             tmp_targets = []
@@ -260,7 +258,7 @@ class SEC:
     def step2_bigram_spacing(self, line:str, label:str) -> list:
         probability = []
         for i in range(1, len(line)-2):
-            right = self.get_bigram_prob_with_label(line[i-1:i+2], label[i-1:i+3], mode=2)
+            right = self.get_bigram_prob_with_label(line[i-1:i+1], label[i-1:i+2], mode=2)
             left = self.get_bigram_prob_with_label(line[i+1:i+3], label[i+1:i+4], mode=0)
             middle = self.get_bigram_prob_with_label(line[i:i+2], label[i:i+3], mode=1)
 
