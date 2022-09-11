@@ -1,5 +1,6 @@
 # KorSEC : Korean Space Error Correction
 N-gram 확률 기반의 한국어 띄어쓰기 및 붙여쓰기 오류 교정 모델
+(아직 성능 개선 단계라서 교정이 제대로 되지 않을 수 있어요😂)
 
 
 ## Introduction
