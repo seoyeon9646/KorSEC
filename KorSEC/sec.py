@@ -454,7 +454,6 @@ class SEC:
             i = index
             for i in range(index, index+len(eojeol)-1):
                 prob = self.w1*trigram_p[i] + self.w2*bigram_p[i]
-                print(i, sent_wo_space[i], round(trigram_p[i],2), round(bigram_p[i],2), round(prob, 2))
                 new_sent += sent_wo_space[i]
                 if prob > threshold:
                     new_sent += " "
