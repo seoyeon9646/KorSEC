@@ -4,11 +4,11 @@ import pickle
 import plyvel
 
 from KorSEC import util
+from collections import defaultdict
 
 class SEC:
-    def __init__(self, dict_name = None, mode="predict"):
+    def __init__(self, dict_name = None, mode="fast"):
         self.alpha = 0.001
-        self.min_count = 5
         self.min_prob, self.max_prob = 1e-5, 1-(1e-05)
         self.bi_target_idx_dict ={
             0 : [4, 5, 6, 7],   # left
@@ -22,31 +22,42 @@ class SEC:
             3 : list(range(1, 16, 2)) # right
         }
         self.marker_dict = {1:"u", 2:"b", 3:"t"}
-
+        
+        self.cache_dict = defaultdict(list)
         self.start, self.end = "S", "E"
         self.w1, self.w2 = 0.537, 0.463
         self.b1, self.b2, self.b3 = 0.302, 0.376, 0.322
         self.t1, self.t2, self.t3, self.t4 = 0.216, 0.272, 0.274, 0.238
-        self.pasting_threshold, self.weak_pasting_threshold = 0.1376, 0.15
+        self.pasting_threshold, self.weak_pasting_threshold = 0.1, 0.1376
         self.spacing_threshold, self.weak_spacing_threshold = 0.5, 0.4485
-        self.get_freq_method = self.get_freq_from_dict if mode=="train" else self.get_freq_from_db
+        self.get_freq_method = self.get_freq_from_dict if mode in ["fast", "train"] else self.get_freq_from_db
         
         if dict_name == None:
             dict_name = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "data/sec"
             )
 
-        if mode!="train":
+        if mode =="fast":
+            self.load_freq_dict(dict_name)
+        elif mode !="train":
             self.load_db(dict_name)
+
+    def load_freq_dict(self, dict_name):
+        if not os.path.exists(dict_name+".freq"):
+            raise Exception("Model doesn't exists! Train first!")
+        else:
+            with open(dict_name + ".freq", "rb") as f:
+                self.ngram_cnt_dict = pickle.load(f)
+            #self.load_parameters(dict_name)
 
     def load_db(self, dict_name):
         if not os.path.exists(dict_name+".dict"):
             raise Exception("Model doesn't exists! Train first!")
 
         self.db = plyvel.DB(dict_name+".dict")  
-        self.set_dict(dict_name)  
+        self.load_parameters(dict_name)  
 
-    def set_dict(self, dict_name):
+    def load_parameters(self, dict_name):
         if not os.path.exists(dict_name+".param"):
             print("Param file doesn't exists! We'll use default parameters")
         else:
@@ -109,7 +120,10 @@ class SEC:
             return result
         return (result + self.alpha)
 
-    def get_freq_from_db(self, key):
+    def get_freq_from_db(self, key, depth=0):
+        if key in self.cache_dict:
+            return self.cache_dict[key]
+
         length = len(key)
         marker = self.marker_dict[length]
         encoded_key = (marker + key).encode()
@@ -117,9 +131,13 @@ class SEC:
         result = self.db.get(encoded_key)
 
         if result is None:
-            return [0] * (2**(length+1))
+            if (length == 1) or (depth>2):
+                self.cache_dict[key] = [0]*(2**(len(key)+1))
+                return [0]*(2**(len(key)+1))
+            return self.get_indirect_prob(key, depth)
         
         val = ast.literal_eval(result.decode())
+        self.cache_dict[key] = val
         return val
     
     def get_freq_from_dict(self, key, depth=0):
@@ -199,8 +217,8 @@ class SEC:
         result = self.min_prob
         bigram_freq = self.get_freq_method(key)
         total_count = self._sum_all(bigram_freq)
-
-        if total_count>=1:
+        
+        if total_count>=self.min_prob:
             target_idxs = self._get_target_idxs(label, mode)
             result = self._sum_elements(bigram_freq, target_idxs) / total_count
 
@@ -211,7 +229,7 @@ class SEC:
         freq = self.get_freq_method(key)
         total_count = self._sum_all(freq)
 
-        if total_count >= self.min_count:
+        if total_count >= self.min_prob:
             result = self._sum_elements(freq, idxs) / total_count
 
         return result
@@ -245,7 +263,6 @@ class SEC:
             if p > self.min_prob:
                 total_weight += w
                 prob = prob + (w*p)
-        
         #prob = self.b1*right + self.b2*middle + self.b3*left
         if total_weight>0:
             prob = prob/total_weight
@@ -313,40 +330,31 @@ class SEC:
     def step1_trigram_spacing(self, line:str, label:str, idx:int) -> list:
         if idx == 2:
             right = self.get_prob_with_idxs(line[:2], idxs=[5,7])
-
-            key, val = line[:3], label[:4]
-            target_idxs = self._get_target_idxs_from_label(val)
-            mid_right = self.get_prob_with_idxs(key, target_idxs)
         else:
             key, val = line[idx-3:idx], label[idx-3:idx+1]
             target_idxs = self._get_target_idxs_from_label(val)
             right = self.get_prob_with_idxs(key, target_idxs)
 
-            key, val = line[idx-2:idx+1], label[idx-2:idx+2]
-            target_idxs = self._get_target_idxs_from_label(val)
-            mid_right = self.get_prob_with_idxs(key, target_idxs)
+        key, val = line[idx-2:idx+1], label[idx-2:idx+2]
+        target_idxs = self._get_target_idxs_from_label(val)
+        mid_right = self.get_prob_with_idxs(key, target_idxs)
 
         if idx == (len(line)-3):
             left = self.get_prob_with_idxs(line[idx:idx+2], idxs=[5, 7])
-            
-            key, val = line[idx-1:idx+2], label[idx-1:idx+3]
-            target_idxs = self._get_target_idxs_from_label(val)
-            mid_left = self.get_prob_with_idxs(key, target_idxs)
         else:
             key, val = line[idx:idx+3], label[idx:idx+4]
             target_idxs = self._get_target_idxs_from_label(val)
             left = self.get_prob_with_idxs(key, target_idxs)
 
-            key, val = line[idx-1:idx+2], label[idx-1:idx+3]
-            target_idxs = self._get_target_idxs_from_label(val)
-            mid_left = self.get_prob_with_idxs(key, target_idxs)
+        key, val = line[idx-1:idx+2], label[idx-1:idx+3]
+        target_idxs = self._get_target_idxs_from_label(val)
+        mid_left = self.get_prob_with_idxs(key, target_idxs)
 
         total_weight, prob = 0, 0
         for w, p in zip([self.t1, self.t2, self.t3, self.t4], [right, mid_right, mid_left, left]):
             if p > self.min_prob:
                 total_weight += w
                 prob = prob + (w*p)
-
         #prob = self.t1*right + self.t2*mid_right + self.t3*mid_left + self.t4*left
         if total_weight>0:
             prob = prob/total_weight
@@ -359,17 +367,15 @@ class SEC:
         for i in range(1, len(line)-2):
             if i==1:
                 right = self.get_prob_with_idxs(line[:2], idxs=[5, 7])
-                mid_right = self.get_trigram_prob_with_label(line[:3], label[:4], mode=2)
             else:
                 right = self.get_trigram_prob_with_label(line[i-2:i+1], label[i-2:i+2], mode=3)
-                mid_right = self.get_trigram_prob_with_label(line[i-1:i+2], label[i-1:i+3], mode=2)
+            mid_right = self.get_trigram_prob_with_label(line[i-1:i+2], label[i-1:i+3], mode=2)
 
             if i == (len(line)-3):
                 left = self.get_prob_with_idxs(line[i+1:i+3], idxs=[5, 7])
-                mid_left = self.get_trigram_prob_with_label(line[i:i+3], label[i:i+4], mode=1)
             else:
                 left = self.get_trigram_prob_with_label(line[i+1:i+4], label[i+1:i+5], mode=0)
-                mid_left = self.get_trigram_prob_with_label(line[i:i+3], label[i:i+4], mode=1)
+            mid_left = self.get_trigram_prob_with_label(line[i:i+3], label[i:i+4], mode=1)
             
             prob = self.t1*right + self.t2*mid_right + self.t3*mid_left + self.t4*left
             probability.append(prob)
@@ -456,7 +462,7 @@ class SEC:
                 if prob > threshold:
                     new_sent += " "
             
-            if i<(len(sent_wo_space)-1):
+            if i<(len(sent_wo_space)):
                 new_sent = new_sent + eojeol[-1] + " "
             index += len(eojeol)
         
